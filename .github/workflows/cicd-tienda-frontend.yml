@@ -1,0 +1,121 @@
+name: CI/CD Tienda Perritos - Frontend a ECS
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  # =========================================================
+  # JOB 1: Validación
+  # Valida que los archivos HTML/JS estén correctos
+  # =========================================================
+  validate:
+    name: Validación del Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Validar HTML
+        run: |
+          # Verificar que index.html existe y no está vacío
+          test -s frontend/index.html || (echo "index.html vacío" && exit 1)
+          echo "index.html OK"
+
+      - name: Validar JS con Node
+        run: |
+          # Sintaxis básica de app.js (debe ser parseable como JS)
+          node -c frontend/app.js 2>&1 || {
+            # app.js tiene placeholder ${API_URL} que no es JS válido aún
+            # antes del build, así que reemplazamos para validar sintaxis
+            sed 's|\${API_URL}|http://test/api|g' frontend/app.js > /tmp/app-test.js
+            node -c /tmp/app-test.js && echo "app.js OK"
+          }
+
+      - name: Validar configuración de Nginx
+        run: |
+          # Levantar un contenedor nginx temporal y validar la config
+          docker run --rm \
+            -v ${{ github.workspace }}/frontend/default.conf:/etc/nginx/conf.d/default.conf \
+            nginx:alpine nginx -t
+          echo "default.conf OK"
+
+  # =========================================================
+  # JOB 2: Build, Push y Deploy
+  # =========================================================
+  build-push-deploy:
+    name: Build Push Deploy Frontend
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login en Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build imagen Frontend con API_URL inyectada
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: eft-frontend
+          IMAGE_TAG: ${{ github.sha }}
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          cd frontend
+          docker build \
+            --build-arg API_URL="$API_URL" \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Escaneo de vulnerabilidades con Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.image }}
+          format: "table"
+          exit-code: "0"
+          severity: "CRITICAL,HIGH"
+        continue-on-error: true
+
+      - name: Push imagen Frontend a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: eft-frontend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Descargar Task Definition actual
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition eft-frontend-task \
+            --query taskDefinition > task-definition.json
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .enableFaultInjection)' \
+            task-definition.json > tmp-task-def.json
+          mv tmp-task-def.json task-definition.json
+
+      - name: Renderizar nueva imagen en Task Definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: frontend
+          image: ${{ env.image }}
+
+      - name: Desplegar en ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: eft-frontend-service
+          cluster: eft-cluster
+          wait-for-service-stability: true

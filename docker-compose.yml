@@ -1,0 +1,29 @@
+# =========================================================
+# docker-compose.yml - Frontend Innovatech Chile
+# Levanta solo el frontend localmente apuntando a un backend
+# que debe estar corriendo aparte (típicamente el backend
+# se levanta desde el repo del backend con su propio compose)
+#
+# Uso:
+#   API_URL=http://localhost:3000/api docker-compose up --build
+# =========================================================
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # La URL se inyecta en build time mediante envsubst
+        API_URL: ${API_URL:-http://localhost:3000/api}
+    container_name: tienda-perritos-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    networks:
+      - tienda-network
+
+networks:
+  tienda-network:
+    driver: bridge
