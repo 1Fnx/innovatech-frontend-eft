@@ -3,6 +3,8 @@
 Repositorio del Backend (API REST Node.js) y Base de Datos (MySQL) de la aplicación Tienda de Alimentos para Perritos.
 
 ## Estructura del Proyecto
+
+```
 .
 ├── backend/
 │   ├── Dockerfile              # Multietapa (builder + runtime) con pnpm
@@ -20,6 +22,7 @@ Repositorio del Backend (API REST Node.js) y Base de Datos (MySQL) de la aplicac
 │   ├── cicd-tienda-backend.yml
 │   └── cicd-tienda-db.yml
 └── README.md
+```
 
 ## Cómo correr localmente
 
@@ -55,8 +58,8 @@ pnpm test
 
 Se gatilla con cada push a main y ejecuta:
 
-1. Job test: instala dependencias con pnpm y corre tests con Jest
-2. Job build-push-deploy: build Docker, escaneo Trivy, push a ECR, deploy a ECS
+1. **Job test**: instala dependencias con pnpm y corre tests con Jest
+2. **Job build-push-deploy**: build Docker, escaneo Trivy, push a ECR, deploy a ECS
 
 ## Endpoints de la API
 
